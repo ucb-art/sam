@@ -10,7 +10,11 @@ import dsptools.numbers.Real
 import dsptools.numbers.implicits._
 import dsptools.junctions._
 
-case class SAMConfig(subpackets: Int, bufferDepth: Int = 2) {
+// requires rocketchip
+import junctions._
+import util._
+
+case class SAMConfig(subpackets: Int = 2, bufferDepth: Int = 2) {
   
 }
 
@@ -28,60 +32,45 @@ class SAM[T<:Data:Real](w: Int, val config: SAMConfig = SAMConfig())
 
   val io = IO(new SAMIO(UInt(width = w), config))
 
-  // state machine stuff
-  val sIdle :: sTriggered :: sWriting :: sReading :: Nil = Enum(UInt(), 4)
-  val state = Reg(init = sIdle)
-
   // memories
-  val write_indices = log2Ceil(config.subpackets*config.bufferDepth)
-  val write_index = Counter(state === sWriting && io.in.valid, write_indices)._1
+  // TODO: ensure that the master never tries to read beyond the depth of the SeqMem
   val mem = SeqMem(config.subpackets*config.bufferDepth, UInt(width = w))
-  
-  // le state machine
-  switch(state) {
-    is (sIdle) {
-     
-    }
-    is (sTriggered) {
-      when (io.in.sync && io.in.valid) { state := sWriting }
-    }
-    is (sWriting) {
-      when (io.in.valid) {
-        mem(write_index) := io.in.bits
-        when (write_index === UInt(write_indices-1)) {
-          state := sIdle
-        }
-      }
-    }
-    is (sReading) {
-    }
-  }
 
+  // TODO: AXI4Stream side
+
+  // TODO: ensure that the reading never happens beyond where the writing has occurred
+
+  // AXI4 side
   val rIdle :: rWait :: rReadFirst :: rSend :: Nil = Enum(Bits(), 3)
   val rState = Reg(init = rIdle)
   val rAddr = Reg(UInt(width = nastiXAddrBits - log2Ceil(w/8)))
   val rLen = Reg(UInt(width = nastiXLenBits - log2Ceil(w/nastiXDataBits)))
-  val rawData = mem.read(rAddr)
+  val rawData = mem.read(rAddr) // this will read every cycle; how do we make it single-ported?
   val rData = Reg(UInt(width = w))
   val rCount =
     if (w == nastiXDataBits) Reg(UInt(width = 1))
     else Reg(UInt(width = log2Ceil(w/nastiXDataBits)))
   val rId = Reg(io.ar.bits.id)
 
+  // state must be Idle here, since fire happens when ar.ready is high
+  // grab the address information, then wait for data
   when (io.ar.fire()) {
     rAddr := io.ar.bits.addr >> UInt(log2Ceil(w/8))
     rLen  := io.ar.bits.len  >> UInt(log2Ceil(w/nastiXDataBits))
     rState := rWait
   }
 
-  when (state === rWait) { rState := rRead }
+  // delay state by a cycle to align with SeqMem, I think
+  when (state === rWait) { rState := rReadFirst }
   when (state === rReadFirst) {
     rData := rawData
     rAddr := rAddr + UInt(1)
     rCount := UInt(w/nastiXDataBits-1)
-    rId := io.ar.bits.id
+    rId := io.ar.bits.id // seems unnecessary, since rId is always this
     rState := rSend
   }
+
+  // wait for ready from master when in Send state
   when (io.r.fire()) {
     when (rCount === UInt(0)) {
       when (rLen === UInt(0)) {
@@ -105,6 +94,7 @@ class SAM[T<:Data:Real](w: Int, val config: SAMConfig = SAMConfig())
     data = rData(nastiXDataBits - 1, 0),
     last = rLen === UInt(0) && rCount === UInt(0))
 
+  // no write capabilities yet
   io.aw.ready := Bool(false)
   io.w.ready := Bool(false)
   io.b.valid := Bool(false)
@@ -116,4 +106,9 @@ class SAM[T<:Data:Real](w: Int, val config: SAMConfig = SAMConfig())
      io.ar.bits.len(log2Ceil(w/nastiXDataBits)-1, 0).andR &&
      io.ar.bits.size === UInt(log2Up(nastiXDataBits/8))),
    "Invalid read request")
+
+  // required by AXI4 spec
+  when (reset) {
+    io.r.valid := Bool(false)
+  }
 }
