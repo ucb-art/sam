@@ -4,6 +4,7 @@
 
 package sam
 
+import cde._
 import chisel3.util._
 import chisel3._
 import dsptools.numbers.Real
@@ -19,15 +20,14 @@ case class SAMConfig(subpackets: Int = 2, bufferDepth: Int = 2) {
 }
 
 // stream to axi4 memory io
-class SAMIO[T<:Data:Real](genIn: => T, val config: SAMConfig = SAMConfig())
-                         (implicit p: Parameters) extends ParameterizedBundle()(p) {
-
+class SAMIO(genIn: UInt, val config: SAMConfig = SAMConfig())
+                         (implicit p: Parameters) extends Bundle {
   val in = Input(ValidWithSync(genIn))
   val axi = Output(new NastiIO)
 }
 
 // stream to axi4 memory
-class SAM[T<:Data:Real](w: Int, val config: SAMConfig = SAMConfig())
+class SAM(w: Int, val config: SAMConfig = SAMConfig())
                        (implicit p: Parameters) extends NastiModule()(p) {
 
   val io = IO(new SAMIO(UInt(width = w), config))
@@ -42,6 +42,7 @@ class SAM[T<:Data:Real](w: Int, val config: SAMConfig = SAMConfig())
 
   // AXI4 side
   val rIdle :: rWait :: rReadFirst :: rSend :: Nil = Enum(Bits(), 3)
+  val state = Reg(UInt(3.W), init=rIdle)
   val rState = Reg(init = rIdle)
   val rAddr = Reg(UInt(width = nastiXAddrBits - log2Ceil(w/8)))
   val rLen = Reg(UInt(width = nastiXLenBits - log2Ceil(w/nastiXDataBits)))
@@ -50,13 +51,13 @@ class SAM[T<:Data:Real](w: Int, val config: SAMConfig = SAMConfig())
   val rCount =
     if (w == nastiXDataBits) Reg(UInt(width = 1))
     else Reg(UInt(width = log2Ceil(w/nastiXDataBits)))
-  val rId = Reg(io.ar.bits.id)
+  val rId = Reg(io.axi.ar.bits.id)
 
   // state must be Idle here, since fire happens when ar.ready is high
   // grab the address information, then wait for data
-  when (io.ar.fire()) {
-    rAddr := io.ar.bits.addr >> UInt(log2Ceil(w/8))
-    rLen  := io.ar.bits.len  >> UInt(log2Ceil(w/nastiXDataBits))
+  when (io.axi.ar.fire()) {
+    rAddr := io.axi.ar.bits.addr >> UInt(log2Ceil(w/8))
+    rLen  := io.axi.ar.bits.len  >> UInt(log2Ceil(w/nastiXDataBits))
     rState := rWait
   }
 
@@ -66,12 +67,12 @@ class SAM[T<:Data:Real](w: Int, val config: SAMConfig = SAMConfig())
     rData := rawData
     rAddr := rAddr + UInt(1)
     rCount := UInt(w/nastiXDataBits-1)
-    rId := io.ar.bits.id // seems unnecessary, since rId is always this
+    rId := io.axi.ar.bits.id // seems unnecessary, since rId is always this
     rState := rSend
   }
 
   // wait for ready from master when in Send state
-  when (io.r.fire()) {
+  when (io.axi.r.fire()) {
     when (rCount === UInt(0)) {
       when (rLen === UInt(0)) {
         rState := rIdle
@@ -87,28 +88,28 @@ class SAM[T<:Data:Real](w: Int, val config: SAMConfig = SAMConfig())
     }
   }
 
-  io.ar.ready := (rState === rIdle)
-  io.r.valid := (rState === rSend)
-  io.r.bits := NastiReadDataChannel(
+  io.axi.ar.ready := (rState === rIdle)
+  io.axi.r.valid := (rState === rSend)
+  io.axi.r.bits := NastiReadDataChannel(
     id = rId,
     data = rData(nastiXDataBits - 1, 0),
     last = rLen === UInt(0) && rCount === UInt(0))
 
   // no write capabilities yet
-  io.aw.ready := Bool(false)
-  io.w.ready := Bool(false)
-  io.b.valid := Bool(false)
+  io.axi.aw.ready := Bool(false)
+  io.axi.w.ready := Bool(false)
+  io.axi.b.valid := Bool(false)
 
-  require(w % nastiXDataBits === 0)
+  assert(w % nastiXDataBits === 0)
 
-  assert(!io.ar.valid ||
-    (io.ar.bits.addr(log2Ceil(w/8)-1, 0) === UInt(0) &&
-     io.ar.bits.len(log2Ceil(w/nastiXDataBits)-1, 0).andR &&
-     io.ar.bits.size === UInt(log2Up(nastiXDataBits/8))),
+  assert(!io.axi.ar.valid ||
+    (io.axi.ar.bits.addr(log2Ceil(w/8)-1, 0) === UInt(0) &&
+     io.axi.ar.bits.len(log2Ceil(w/nastiXDataBits)-1, 0).andR &&
+     io.axi.ar.bits.size === UInt(log2Up(nastiXDataBits/8))),
    "Invalid read request")
 
   // required by AXI4 spec
   when (reset) {
-    io.r.valid := Bool(false)
+    io.axi.r.valid := Bool(false)
   }
 }
