@@ -1,4 +1,4 @@
-name := "dsp-template"
+name := "sam"
 
 organization := "edu.berkeley.cs"
 
