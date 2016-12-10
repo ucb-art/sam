@@ -22,8 +22,8 @@ case class SAMConfig(subpackets: Int = 2, bufferDepth: Int = 2) {
 // stream to axi4 memory io
 class SAMIO(genIn: UInt, val config: SAMConfig = SAMConfig())
                          (implicit p: Parameters) extends Bundle {
-  val in = Input(ValidWithSync(genIn))
-  val axi = Output(new NastiIO)
+  val in = Flipped(ValidWithSync(genIn))
+  val axi = Flipped(new NastiIO)
 }
 
 // stream to axi4 memory
@@ -41,7 +41,7 @@ class SAM(w: Int, val config: SAMConfig = SAMConfig())
   // TODO: ensure that the reading never happens beyond where the writing has occurred
 
   // AXI4 side
-  val rIdle :: rWait :: rReadFirst :: rSend :: Nil = Enum(Bits(), 3)
+  val rIdle :: rWait :: rReadFirst :: rSend :: Nil = Enum(Bits(), 4)
   val state = Reg(UInt(3.W), init=rIdle)
   val rState = Reg(init = rIdle)
   val rAddr = Reg(UInt(width = nastiXAddrBits - log2Ceil(w/8)))
@@ -51,7 +51,7 @@ class SAM(w: Int, val config: SAMConfig = SAMConfig())
   val rCount =
     if (w == nastiXDataBits) Reg(UInt(width = 1))
     else Reg(UInt(width = log2Ceil(w/nastiXDataBits)))
-  val rId = Reg(io.axi.ar.bits.id)
+  val rId = Reg(io.axi.ar.bits.id.cloneType)
 
   // state must be Idle here, since fire happens when ar.ready is high
   // grab the address information, then wait for data
@@ -100,7 +100,7 @@ class SAM(w: Int, val config: SAMConfig = SAMConfig())
   io.axi.w.ready := Bool(false)
   io.axi.b.valid := Bool(false)
 
-  assert(w % nastiXDataBits === 0)
+  // assert(w % nastiXDataBits === 0)
 
   assert(!io.axi.ar.valid ||
     (io.axi.ar.bits.addr(log2Ceil(w/8)-1, 0) === UInt(0) &&
