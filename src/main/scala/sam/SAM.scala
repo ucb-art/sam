@@ -4,33 +4,27 @@
 
 package sam
 
-import cde._
 import chisel3.util._
 import chisel3._
-import dsptools.numbers.Real
-import dsptools.numbers.implicits._
 import dsptools.junctions._
-
-// requires rocketchip
+import scala.math._
+import dsptools.numbers.{Real, DspComplex}
+import dsptools.numbers.implicits._
+import dsptools._
+import cde.Parameters
 import junctions._
 import util._
 
-case class SAMConfig(subpackets: Int = 2, bufferDepth: Int = 2) {
-  
+class SAMIO[T<:Data:Real]()(implicit val p: Parameters) extends Bundle with HasSAMGenParameters[T] {
+  val config = p(SAMKey)(p)
+
+  val in = Input(ValidWithSync(Vec(lanesIn, genIn())))
+  val out = Flipped(new NastiIO)
 }
 
-// stream to axi4 memory io
-class SAMIO(genIn: UInt, val config: SAMConfig = SAMConfig())
-                         (implicit p: Parameters) extends Bundle {
-  val in = Flipped(ValidWithSync(genIn))
-  val axi = Flipped(new NastiIO)
-}
-
-// stream to axi4 memory
-class SAM(w: Int, val config: SAMConfig = SAMConfig())
-                       (implicit p: Parameters) extends NastiModule()(p) {
-
-  val io = IO(new SAMIO(UInt(width = w), config))
+class SAM[T<:Data:Real]()(implicit val p: Parameters) extends Module with HasSAMGenParameters[T] {
+  val io = IO(new SAMIO[T])
+  val config = p(SAMKey)(p)
 
   // memories
   // TODO: ensure that the master never tries to read beyond the depth of the SeqMem
@@ -112,4 +106,26 @@ class SAM(w: Int, val config: SAMConfig = SAMConfig())
   when (reset) {
     io.axi.r.valid := Bool(false)
   }
+
+}
+
+class SAMWrapper[T<:Data:Real]()(implicit p: Parameters) extends GenDspBlock[T, T]()(p) with HasSAMGenParameters[T] {
+
+  // SCR 
+  val baseAddr = BigInt(0)
+  val sam = Module(new SAM[T])
+  val config = p(FIRKey)(p)
+
+  (0 until config.numberOfTaps).map( i =>
+    addControl(s"firCoeff$i", 0.U)
+  )
+  addStatus("firStatus")
+
+  fir.io.in <> unpackInput(lanesIn, genIn())
+  val taps = Wire(Vec(config.numberOfTaps, genTap.getOrElse(genIn())))
+  val w = taps.zipWithIndex.map{case (x, i) => x.fromBits(control(s"firCoeff$i"))}
+  fir.io.taps := w
+
+  unpackOutput(lanesOut, genOut()) <> fir.io.out
+  status("firStatus") := fir.io.out.sync
 }
