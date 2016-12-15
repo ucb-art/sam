@@ -16,20 +16,17 @@ import _root_.junctions._
 import util._
 
 class SAMIO[T<:Data:Real]()(implicit val p: Parameters) extends Bundle with HasSAMGenParameters[T] {
-  val config = p(SAMKey)(p)
-
   val in = Input(ValidWithSync(genIn()))
   val out = new NastiIO().flip
 }
 
 class SAM[T<:Data:Real]()(implicit p: Parameters) extends NastiModule()(p) with HasSAMGenParameters[T] {
   val io = IO(new SAMIO[T])
-  val config = p(SAMKey)(p)
   val w = p(DspBlockKey).inputWidth
 
   // memories
   // TODO: ensure that the master never tries to read beyond the depth of the SeqMem
-  val mem = SeqMem(config.subpackets*config.bufferDepth, UInt(width = w))
+  val mem = SeqMem(samConfig.subpackets*samConfig.bufferDepth, UInt(width = w))
 
   // TODO: AXI4Stream side
 
@@ -115,7 +112,6 @@ class SAMWrapper[T<:Data:Real]()(implicit p: Parameters) extends GenDspBlock[T, 
   // SCR 
   val baseAddr = BigInt(0)
   val sam = Module(new SAM[T])
-  val config = p(SAMKey)(p)
 
   addControl("samControl", 0.U)
   addStatus("samStatus")

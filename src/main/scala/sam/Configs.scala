@@ -36,11 +36,8 @@ class DspConfig extends Config(
       implicit val p = q
       Module(new SAMWrapper[DspReal])
     }}
-    case SAMKey => { (q: Parameters) => { 
-      implicit val p = q
-      SAMConfig[DspReal](10, 10)
-    }}
-	  case NastiKey => NastiParameters(64, 32, 1)
+    case SAMKey => SAMConfig(10, 10)
+    case NastiKey => NastiParameters(64, 32, 1)
     case PAddrBits => 32
     case CacheBlockOffsetBits => 6
     case AmoAluOperandBits => 64
@@ -78,16 +75,14 @@ class DspConfig extends Config(
   }
 }
 
-case object SAMKey extends Field[(Parameters) => SAMConfig[DspReal]]
+case object SAMKey extends Field[SAMConfig]
 
 trait HasSAMGenParameters[T <: Data] extends HasGenParameters[T, T] {
-
+  val p: Parameters
+  val samConfig = p(SAMKey)
 }
 
-case class SAMConfig[T<:Data:Real](val subpackets: Int, val bufferDepth: Int)(implicit val p: Parameters) extends HasSAMGenParameters[T] {
-  // sanity checks
-  //require(lanesIn%lanesOut == 0, "Decimation amount must be an integer.")
-  //require(lanesOut <= lanesIn, "Cannot have more output lanes than input lanes.")
-  //require(pipelineDepth >= 0, "Must have positive pipelining")
-}
-
+case class SAMConfig(
+  val subpackets: Int,
+  val bufferDepth: Int
+)
