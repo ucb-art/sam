@@ -20,7 +20,7 @@ import cde._
 import junctions._
 import uncore.tilelink._
 import uncore.coherence._
-import fir.Generator.params
+import sam.Generator.params
 
 import dsptools._
 import scala.collection.mutable.Map
@@ -34,18 +34,18 @@ class DspConfig extends Config(
   (pname, site, here) => pname match {
     case BuildDSP => { (q: Parameters) => {
       implicit val p = q
-      Module(new FIRWrapper[DspReal])
+      Module(new SAMWrapper[DspReal])
     }}
-    case FIRKey => { (q: Parameters) => { 
+    case SAMKey => { (q: Parameters) => { 
       implicit val p = q
-      FIRConfig[DspReal](numberOfTaps = 4, pipelineDepth = 0)
+      SAMConfig[DspReal](10, 10)
     }}
 	  case NastiKey => NastiParameters(64, 32, 1)
     case PAddrBits => 32
     case CacheBlockOffsetBits => 6
     case AmoAluOperandBits => 64
-    case TLId => "FIR"
-    case TLKey("FIR") =>
+    case TLId => "SAM"
+    case TLKey("SAM") =>
       TileLinkParameters(
         coherencePolicy = new MEICoherence(
           new NullRepresentation(2)),
@@ -59,11 +59,9 @@ class DspConfig extends Config(
         dataBits = 64 * 8)
     case DspBlockKey => DspBlockParameters(1024, 1024)
     case GenKey => new GenParameters {
-      def getReal(): DspReal = DspReal(0.0).cloneType
-      def genIn [T <: Data] = getReal().asInstanceOf[T]
-      override def genOut[T <: Data] = getReal().asInstanceOf[T]
-      val lanesIn = 2
-      override val lanesOut = 2
+      def genIn [T <: Data] = UInt(1024.W).asInstanceOf[T]
+      // not used
+      val lanesIn = 1
     }
     case _ => throw new CDEMatchError
   }) with HasIPXACTParameters {
@@ -76,22 +74,20 @@ class DspConfig extends Config(
     parameterMap ++= List(("InputLanes", params(GenKey).lanesIn.toString), ("OutputLanes", params(GenKey).lanesOut.toString))
     parameterMap ++= List(("InputTotalBits", params(DspBlockKey).inputWidth.toString))
 
-    parameterMap ++= List(("NumberOfTaps", params(FIRKey)(params).numberOfTaps.toString), ("PipelineDepth", params(FIRKey)(params).pipelineDepth.toString))
-
     parameterMap
   }
 }
 
-case object FIRKey extends Field[(Parameters) => FIRConfig[DspReal]]
+case object SAMKey extends Field[(Parameters) => SAMConfig[DspReal]]
 
-trait HasFIRGenParameters[T <: Data] extends HasGenParameters[T, T] {
-   def genTap: Option[T] = None
+trait HasSAMGenParameters[T <: Data] extends HasGenParameters[T, T] {
+
 }
 
-case class FIRConfig[T<:Data:Real](val numberOfTaps: Int, val pipelineDepth: Int)(implicit val p: Parameters) extends HasFIRGenParameters[T] {
+case class SAMConfig[T<:Data:Real](val subpackets: Int, val bufferDepth: Int)(implicit val p: Parameters) extends HasSAMGenParameters[T] {
   // sanity checks
-  require(lanesIn%lanesOut == 0, "Decimation amount must be an integer.")
-  require(lanesOut <= lanesIn, "Cannot have more output lanes than input lanes.")
-  require(pipelineDepth >= 0, "Must have positive pipelining")
+  //require(lanesIn%lanesOut == 0, "Decimation amount must be an integer.")
+  //require(lanesOut <= lanesIn, "Cannot have more output lanes than input lanes.")
+  //require(pipelineDepth >= 0, "Must have positive pipelining")
 }
 
