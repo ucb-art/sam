@@ -34,12 +34,9 @@ class DspConfig extends Config(
   (pname, site, here) => pname match {
     case BuildDSP => { (q: Parameters) => {
       implicit val p = q
-      Module(new SAMWrapper[DspReal])
+      Module(new SAMWrapper)
     }}
-    case SAMKey => { (q: Parameters) => { 
-      implicit val p = q
-      SAMConfig[DspReal](10, 10)
-    }}
+    case SAMKey => SAMConfig(10, 10, 0)
 	  case NastiKey => NastiParameters(64, 32, 1)
     case PAddrBits => 32
     case CacheBlockOffsetBits => 6
@@ -59,8 +56,8 @@ class DspConfig extends Config(
         dataBits = 64 * 8)
     case DspBlockKey => DspBlockParameters(1024, 1024)
     case GenKey => new GenParameters {
-      def genIn [T <: Data] = UInt(1024.W).asInstanceOf[T]
-      // not used
+      // these are not used for the SAM block
+      def genIn [T <: Data] = UInt(1.W).asInstanceOf[T]
       val lanesIn = 1
     }
     case _ => throw new CDEMatchError
@@ -78,16 +75,13 @@ class DspConfig extends Config(
   }
 }
 
-case object SAMKey extends Field[(Parameters) => SAMConfig[DspReal]]
+case object SAMKey extends Field[SAMConfig]
 
-trait HasSAMGenParameters[T <: Data] extends HasGenParameters[T, T] {
-
-}
-
-case class SAMConfig[T<:Data:Real](val subpackets: Int, val bufferDepth: Int)(implicit val p: Parameters) extends HasSAMGenParameters[T] {
+case class SAMConfig(val subpackets: Int, val bufferDepth: Int, val baseAddr: Int) {
   // sanity checks
   //require(lanesIn%lanesOut == 0, "Decimation amount must be an integer.")
   //require(lanesOut <= lanesIn, "Cannot have more output lanes than input lanes.")
   //require(pipelineDepth >= 0, "Must have positive pipelining")
+  val memAddrBits = log2Up(subpackets/bufferDepth)
 }
 

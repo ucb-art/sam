@@ -32,8 +32,8 @@ import dsptools._
 
 object LocalTest extends Tag("edu.berkeley.tags.LocalTest")
 
-class FIRWrapperTester[T <: Data](c: FIRWrapper[T])(implicit p: Parameters) extends DspBlockTester(c) {
-  val config = p(FIRKey)(p)
+class SAMTester(c: SAMWrapper)(implicit p: Parameters) extends DspBlockTester(c) {
+  val config = p(SAMKey)
   val gk = p(GenKey)
   val test_length = 10
   
@@ -50,12 +50,10 @@ class FIRWrapperTester[T <: Data](c: FIRWrapper[T])(implicit p: Parameters) exte
   }
   def streamIn = rawStreamIn.map(doublesToBigInt)
 
-  // use Breeze FIR filter, but trim (it zero pads the input) and decimate output
-  val expected_output = filter(DenseVector(rawStreamIn.flatten), DenseVector(filter_coeffs)).toArray.drop(config.numberOfTaps-2).dropRight(config.numberOfTaps-2).grouped(gk.lanesIn/gk.lanesOut).map(_.head).toArray
 
   pauseStream
   //println("Addr Map:")
-  //println(testchipip.SCRAddressMap("FIRWrapper").get.map(_.toString).toString)
+  //println(testchipip.SCRAddressMap("SAMWrapper").get.map(_.toString).toString)
   // assumes coefficients are first addresses
   filter_coeffs.zipWithIndex.foreach { case(x, i) => axiWrite(i*8, doubleToBigIntBits(x)) }
   step(10)
@@ -84,8 +82,8 @@ class FIRWrapperTester[T <: Data](c: FIRWrapper[T])(implicit p: Parameters) exte
   }
 }
 
-class FIRWrapperSpec extends FlatSpec with Matchers {
-  behavior of "FIRWrapper"
+class SAMWrapperSpec extends FlatSpec with Matchers {
+  behavior of "SAMWrapper"
   val manager = new TesterOptionsManager {
     testerOptions = TesterOptions(backendName = "verilator", testerSeed = 7L)
     interpreterOptions = InterpreterOptions(setVerbose = false, writeVCD = true)
@@ -93,7 +91,7 @@ class FIRWrapperSpec extends FlatSpec with Matchers {
 
   it should "work with DspBlockTester" in {
     implicit val p: Parameters = Parameters.root(new DspConfig().toInstance)
-    val dut = () => new FIRWrapper[DspReal]()
-    chisel3.iotesters.Driver.execute(dut, manager) { c => new FIRWrapperTester(c) } should be (true)
+    val dut = () => new SAMWrapper()
+    chisel3.iotesters.Driver.execute(dut, manager) { c => new SAMWrapperTester(c) } should be (true)
   }
 }
