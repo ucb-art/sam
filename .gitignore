@@ -339,3 +339,4 @@ hs_err_pid*
 /lib
 /generated-src
 /.ivy2
+/test_run_dir

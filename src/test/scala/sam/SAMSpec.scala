@@ -32,60 +32,41 @@ import dsptools._
 
 object LocalTest extends Tag("edu.berkeley.tags.LocalTest")
 
-class SAMTester(c: SAMWrapper)(implicit p: Parameters) extends DspBlockTester(c) {
+class SAMWrapperTester(c: SAMWrapper)(implicit p: Parameters) extends DspBlockTester(c) {
   val config = p(SAMKey)
   val gk = p(GenKey)
-  val test_length = 10
+
+  // setup input streaming data
+  def streamIn = Seq.fill(100)(BigInt(100))
   
-  // define input datasets here
-  val input = Array.fill(test_length)(Array.fill(gk.lanesIn)(Random.nextDouble*2-1))
-  def rawStreamIn = input
-  val filter_coeffs = Array.fill(config.numberOfTaps)(Random.nextDouble*2-1)
-
-  def doublesToBigInt(in: Array[Double]): BigInt = {
-    in.reverse.foldLeft(BigInt(0)) {case (bi, dbl) =>
-      val new_bi = BigInt(java.lang.Double.doubleToLongBits(dbl))
-      (bi << 64) + new_bi
-    }
-  }
-  def streamIn = rawStreamIn.map(doublesToBigInt)
-
-
+  // pause stream while setting up SCR
   pauseStream
-  //println("Addr Map:")
-  //println(testchipip.SCRAddressMap("SAMWrapper").get.map(_.toString).toString)
-  // assumes coefficients are first addresses
-  filter_coeffs.zipWithIndex.foreach { case(x, i) => axiWrite(i*8, doubleToBigIntBits(x)) }
-  step(10)
+
+  val scr = testchipip.SCRAddressMap("SAMWrapper").get
+  axiWrite(scr("samWStartAddr").toInt, 2)
+  axiWrite(scr("samWTargetCount").toInt, 2)
+  var s = axiRead(scr("samWState").toInt)
+  println(s"State = $s")
+  axiWrite(scr("samWTrig").toInt, 1)
   playStream
-  step(test_length)
-  val output = streamOut.map { x => (0 until gk.lanesOut).map { idx => {
-    val y = (x >> (64 * idx)) & 0xFFFFFFFFFFFFFFFFL
-    java.lang.Double.longBitsToDouble(y.toLong)
-  }}}
-
-  //println("Input")
-  //println(rawStreamIn.flatten.deep.mkString(","))
-  //println("Coefficients")
-  //println(filter_coeffs.deep.mkString(","))
-  //println("Chisel Output")
-  //println(output.toArray.flatten.deep.mkString(","))
-  //println("Reference Output")
-  //println(expected_output.deep.mkString(","))
-
-  output.flatten.zip(expected_output).zipWithIndex.foreach { case((chisel, ref), index) => 
-    if (chisel != ref) {
-      val epsilon = 1e-12
-      val err = abs(chisel-ref)/abs(ref+epsilon)
-      assert(err < epsilon || ref < epsilon, s"Error: mismatch on output $index of ${err*100}%\n\tReference: $ref\n\tChisel:    $chisel")
-    }
-  }
+  step(1)
+  pauseStream
+  s = axiRead(scr("samWState").toInt)
+  println(s"State = $s")
+  playStream
+  poke(c.io.in.sync, 1)
+  step(1)
+  poke(c.io.in.sync, 0)
+  step(1)
+  pauseStream
+  s = axiRead(scr("samWState").toInt)
+  println(s"State = $s")
 }
 
 class SAMWrapperSpec extends FlatSpec with Matchers {
   behavior of "SAMWrapper"
   val manager = new TesterOptionsManager {
-    testerOptions = TesterOptions(backendName = "verilator", testerSeed = 7L)
+    testerOptions = TesterOptions(backendName = "firrtl", testerSeed = 7L)
     interpreterOptions = InterpreterOptions(setVerbose = false, writeVCD = true)
   }
 
