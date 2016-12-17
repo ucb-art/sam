@@ -28,9 +28,10 @@ class SAMIO()(implicit p: Parameters) extends NastiBundle()(p) {
   val wWriteCount = Output(UInt(config.memAddrBits.W))
   val wStartAddr = Input(UInt(config.memAddrBits.W))
   val wTargetCount = Input(UInt(config.memAddrBits.W))
+  val wWaitForSync = Input(Bool())
   val wTrig = Input(Bool())
-  val wPacketCount = Output(UInt(log2Up(config.bufferDepth).W))
-  val wState = Output(UInt(log2Up(3).W))
+  val wPacketCount = Output(UInt(log2Up(config.bufferDepth).W)) 
+  val wSyncAddr = Output(UInt(config.memAddrBits.W))
 }
 
 class SAM()(implicit p: Parameters) extends NastiModule()(p) {
@@ -38,13 +39,10 @@ class SAM()(implicit p: Parameters) extends NastiModule()(p) {
   val config = p(SAMKey)
   // [stevo]: make width a multiple of nastiDataWidth
   val w = (ceil(p(DspBlockKey).inputWidth*1.0/nastiXDataBits)*nastiXDataBits).toInt
-  println(s"inputWidth=${p(DspBlockKey).inputWidth}")
-  println(s"nastiXDataBits=$nastiXDataBits")
-  println(s"w=$w")
 
   // memories
   // TODO: ensure that the master never tries to read beyond the depth of the SeqMem
-  val mem = SeqMem(config.subpackets*config.bufferDepth, UInt(width = w))
+  val mem = SeqMem(config.memDepth, UInt(width = w))
 
   // AXI4-Stream side
   val wIdle :: wReady :: wRecord :: Nil = Enum(Bits(), 3)
@@ -52,31 +50,43 @@ class SAM()(implicit p: Parameters) extends NastiModule()(p) {
   val wWriteCount = Reg(init = 0.U(config.memAddrBits.W))
   val wWriteAddr = Reg(init = 0.U(config.memAddrBits.W))
   val wPacketCount = Reg(init = 0.U(log2Up(config.bufferDepth).W))
-  io.wState := wState
+  val wSyncAddr = Reg(init = 0.U(config.memAddrBits.W))
+  val synced = Reg(init = false.B)
+  val wTrigDelay = Reg(next=io.wTrig)
   io.wWriteCount := wWriteCount
   io.wPacketCount := wPacketCount
-  when (io.wTrig) {
-    wState := wReady
+  when (wState === wIdle && io.wTrig && ~wTrigDelay) {
+    wState := wRecord // go straight to record unless asked to wait
     wWriteAddr := io.wStartAddr
     wWriteCount := 0.U
     wPacketCount := 0.U
+    wSyncAddr := io.wStartAddr
+    synced := false.B
+    when (io.wWaitForSync) {
+      wState := wReady
+    }
   }
   when (wState === wReady && io.in.sync && io.in.valid) {
     wState := wRecord
     wPacketCount := wPacketCount + 1.U
+    synced := true.B // synced on address 0 when waiting for sync
   }
   when (wState === wRecord) {
     when (io.in.valid) {
-      mem.write(wWriteAddr, io.in.bits.asUInt)  
+      mem.write(wWriteAddr, io.in.bits)  
       wWriteAddr := wWriteAddr + 1.U
       wWriteCount := wWriteCount + 1.U
       when (wWriteCount === io.wTargetCount - 1.U) {
         wState := wIdle
       } .elsewhen (io.in.sync) {
         wPacketCount := wPacketCount + 1.U // don't increment packet count if we stop next cycle
+        when (~synced) {
+          wSyncAddr := wWriteAddr + 1.U
+          synced := true.B
+        }
       }
-      when (wWriteAddr === (config.memAddrBits-1).U) {
-        wWriteAddr := 0.U  // loop back around 
+      when (wWriteAddr === (config.memDepth-1).U) {
+        wWriteAddr := 0.U  // loop back around
       }
     }
   }
@@ -86,8 +96,7 @@ class SAM()(implicit p: Parameters) extends NastiModule()(p) {
 
   // AXI4 side
   val rIdle :: rWait :: rReadFirst :: rSend :: Nil = Enum(Bits(), 4)
-  val state = Reg(UInt(3.W), init=rIdle)
-  val rState = Reg(init = rIdle)
+  val rState = Reg(UInt(3.W), init=rIdle)
   val rAddr = Reg(UInt(width = nastiXAddrBits - log2Ceil(w/8)))
   val rLen = Reg(UInt(width = nastiXLenBits - log2Ceil(w/nastiXDataBits)))
   val rawData = mem.read(rAddr) // this will read every cycle; how do we make it single-ported?
@@ -106,8 +115,8 @@ class SAM()(implicit p: Parameters) extends NastiModule()(p) {
   }
 
   // delay state by a cycle to align with SeqMem, I think
-  when (state === rWait) { rState := rReadFirst }
-  when (state === rReadFirst) {
+  when (rState === rWait) { rState := rReadFirst }
+  when (rState === rReadFirst) {
     rData := rawData
     rAddr := rAddr + UInt(1)
     rCount := UInt(w/nastiXDataBits-1)
@@ -144,7 +153,8 @@ class SAM()(implicit p: Parameters) extends NastiModule()(p) {
   io.out.w.ready := Bool(false)
   io.out.b.valid := Bool(false)
 
-  // assert(w % nastiXDataBits === 0)
+  // for now
+  require(w % nastiXDataBits == 0)
 
   assert(!io.out.ar.valid ||
     (io.out.ar.bits.addr(log2Ceil(w/8)-1, 0) === UInt(0) &&
@@ -156,10 +166,11 @@ class SAM()(implicit p: Parameters) extends NastiModule()(p) {
   when (reset) {
     io.out.r.valid := Bool(false)
   }
-
 }
 
 class SAMWrapperIO()(implicit p: Parameters) extends BasicDspBlockIO()(p) {
+  val config = p(SAMKey)
+
   val axi_out = new NastiIO().flip
 }
 
@@ -173,20 +184,22 @@ class SAMWrapper()(implicit p: Parameters) extends DspBlock(Some(new SAMWrapperI
   addControl("samWStartAddr", 0.U)
   addControl("samWTargetCount", 0.U)
   addControl("samWTrig", 0.U)
+  addControl("samWWaitForSync", 0.U)
   
   addStatus("samWWriteCount")
   addStatus("samWPacketCount")
-  addStatus("samWState")
+  addStatus("samWSyncAddr")
 
 
   sam.io.in <> io.in
   sam.io.wStartAddr := control("samWStartAddr")(config.memAddrBits-1, 0)
   sam.io.wTargetCount := control("samWTargetCount")(config.memAddrBits-1, 0)
   sam.io.wTrig := control("samWTrig")(0)
+  sam.io.wWaitForSync := control("samWWaitForSync")(0)
 
   status("samWWriteCount") := sam.io.wWriteCount
   status("samWPacketCount") := sam.io.wPacketCount
-  status("samWState") := sam.io.wState
+  status("samWSyncAddr") := sam.io.wSyncAddr
 
   io.asInstanceOf[SAMWrapperIO].axi_out <> sam.io.out
 }

@@ -77,11 +77,14 @@ class DspConfig extends Config(
 
 case object SAMKey extends Field[SAMConfig]
 
+// subpackets = basically how many cycles it takes for sync to repeat
+// bufferDepth = how many packets to store
 case class SAMConfig(val subpackets: Int, val bufferDepth: Int, val baseAddr: Int) {
   // sanity checks
   //require(lanesIn%lanesOut == 0, "Decimation amount must be an integer.")
   //require(lanesOut <= lanesIn, "Cannot have more output lanes than input lanes.")
   //require(pipelineDepth >= 0, "Must have positive pipelining")
-  val memAddrBits = log2Up(subpackets/bufferDepth)
+  val memDepth = subpackets*bufferDepth
+  val memAddrBits = log2Up(memDepth)
 }
 

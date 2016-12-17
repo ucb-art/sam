@@ -22,6 +22,7 @@ import dsptools.numbers.{DspComplex, Real}
 import scala.util.Random
 import scala.math._
 import org.scalatest.Tag
+import scala.collection.mutable.ArrayBuffer
 
 import cde._
 import junctions._
@@ -33,34 +34,110 @@ import dsptools._
 object LocalTest extends Tag("edu.berkeley.tags.LocalTest")
 
 class SAMWrapperTester(c: SAMWrapper)(implicit p: Parameters) extends DspBlockTester(c) {
+  def doublesToBigInt(in: Seq[Double]): BigInt = {
+    in.reverse.foldLeft(BigInt(0)) {case (bi, dbl) =>
+      println(s"double = $dbl")
+      val new_bi = BigInt(java.lang.Double.doubleToLongBits(dbl))
+      (bi << 64) | new_bi
+    }
+  }
+
   val config = p(SAMKey)
   val gk = p(GenKey)
+  val scr = testchipip.SCRAddressMap("SAMWrapper").get
+
+  // custom axiRead for the crossbar side
+  val xbar = c.io.asInstanceOf[SAMWrapperIO].axi_out
+  def xbar_ar_ready: Boolean = { (peek(xbar.ar.ready) != BigInt(0)) }
+  def xbar_r_ready: Boolean = { (peek(xbar.r.valid) != BigInt(0)) }
+  poke(xbar.ar.valid, 0)
+  poke(xbar.r.ready, 0)
+  val xbarDataWidth = xbar.w.bits.data.getWidth
+  val xbarDataBytes = xbarDataWidth / 8
+  val w = (ceil(p(DspBlockKey).inputWidth*1.0/xbarDataWidth)*xbarDataWidth).toInt
+  val maxWait = 100
+  val maxData = config.memDepth*(w/xbarDataWidth)
+  def xbarRead(startAddr: Int, addrCount: Int): Array[BigInt] = {
+
+    // s_read_addr
+    poke(xbar.ar.valid, 1)
+    poke(xbar.ar.bits.id, 0)
+    poke(xbar.ar.bits.user, 0)
+    poke(xbar.ar.bits.addr, startAddr*(w/8))
+    poke(xbar.ar.bits.len, (w/xbarDataWidth)*addrCount-1)
+    poke(xbar.ar.bits.size, log2Up(xbarDataBytes))
+    poke(xbar.ar.bits.lock, 0)
+    poke(xbar.ar.bits.cache, 0)
+    poke(xbar.ar.bits.prot, 0)
+    poke(xbar.ar.bits.qos, 0)
+    poke(xbar.ar.bits.region, 0)
+
+    var waited = 0
+    while (!xbar_ar_ready) {
+      require(waited < maxWait, "Timeout waiting for AXI AR to be ready")
+      step(1)
+      waited += 1
+    }
+
+    step(1)
+    poke(xbar.ar.valid, 0)
+    step(1)
+    poke(xbar.r.ready, 1)
+
+    // s_read_data
+    waited = 0
+    while (!xbar_r_ready) {
+      require(waited < maxWait, "Timeout waiting for AXI R to be valid")
+      step(1)
+      waited += 1
+    } 
+
+    val ret = ArrayBuffer.empty[Double]
+
+    waited = 0
+    while (xbar_r_ready) {
+      require(waited < maxData, "Timeout reading data from memory...too much data!")
+      ret += peek(xbar.r.bits.data).toDouble
+      step(1)
+      waited += 1
+    }
+    poke(xbar.r.ready, 0)
+    step(1)
+    ret.toArray.grouped(w/xbarDataWidth).toArray.map(x => doublesToBigInt(x.toSeq))
+  }
+
+
+
+
+  // actual tests start here
+
 
   // setup input streaming data
-  def streamIn = Seq.fill(100)(BigInt(100))
+  def streamIn = Seq.tabulate(100)(n => BigInt(n))
   
   // pause stream while setting up SCR
   pauseStream
 
-  val scr = testchipip.SCRAddressMap("SAMWrapper").get
-  axiWrite(scr("samWStartAddr").toInt, 2)
-  axiWrite(scr("samWTargetCount").toInt, 2)
-  var s = axiRead(scr("samWState").toInt)
-  println(s"State = $s")
+  axiWrite(scr("samWStartAddr").toInt, 1)
+  axiWrite(scr("samWTargetCount").toInt, 3)
   axiWrite(scr("samWTrig").toInt, 1)
-  playStream
-  step(1)
-  pauseStream
-  s = axiRead(scr("samWState").toInt)
-  println(s"State = $s")
+  axiWrite(scr("samWWaitForSync").toInt, 0)
   playStream
   poke(c.io.in.sync, 1)
   step(1)
   poke(c.io.in.sync, 0)
-  step(1)
+  step(20)
   pauseStream
-  s = axiRead(scr("samWState").toInt)
-  println(s"State = $s")
+  // packet count is basically number of sync signals received
+  val pc = axiRead(scr("samWPacketCount").toInt)
+  println(s"Packet count = $pc")
+
+  val test = xbarRead(startAddr=0, addrCount=5)
+  println(s"Read values:")
+  // TODO: convert for floating point bits to double
+  test.foreach { x => 
+    println(x.toString)
+  }
 }
 
 class SAMWrapperSpec extends FlatSpec with Matchers {
