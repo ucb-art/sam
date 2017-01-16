@@ -3,6 +3,7 @@ package sam
 import chisel3._
 import cde.{Parameters, Field}
 import dsptools._
+import dspjunctions._
 import diplomacy.{LazyModule, LazyModuleImp}
 
 

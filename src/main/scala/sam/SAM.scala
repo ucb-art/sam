@@ -6,7 +6,7 @@ package sam
 
 import chisel3.util._
 import chisel3._
-import dsptools.junctions._
+import dspjunctions._
 import scala.math._
 import dsptools.numbers.{Real, DspComplex}
 import dsptools.numbers.implicits._
@@ -174,13 +174,7 @@ class SAMWrapperIO()(implicit p: Parameters) extends BasicDspBlockIO()(p) {
   val axi_out = new NastiIO().flip
 }
 
-class SAMWrapper()(implicit p: Parameters) extends DspBlock(Some(new SAMWrapperIO))(p) {
-
-  // SCR 
-  val baseAddr = BigInt(0)
-  val sam = Module(new SAM)
-  val config = p(SAMKey)
-
+class LazySAM()(implicit p: Parameters) extends LazyDspBlock()(p) {
   addControl("samWStartAddr", 0.U)
   addControl("samWTargetCount", 0.U)
   addControl("samWTrig", 0.U)
@@ -189,6 +183,17 @@ class SAMWrapper()(implicit p: Parameters) extends DspBlock(Some(new SAMWrapperI
   addStatus("samWWriteCount")
   addStatus("samWPacketCount")
   addStatus("samWSyncAddr")
+
+  lazy val module = Module(new SAMWrapper(this))
+}
+
+class SAMWrapper(outer: LazySAM)(implicit p: Parameters) extends DspBlock(outer, Some(new SAMWrapperIO))(p) {
+
+  // SCR 
+  val baseAddr = BigInt(0)
+  val sam = Module(new SAM)
+  val config = p(SAMKey)
+
 
 
   sam.io.in <> io.in

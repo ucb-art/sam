@@ -23,6 +23,7 @@ import uncore.coherence._
 import sam.Generator.params
 
 import dsptools._
+import dspjunctions._
 import scala.collection.mutable.Map
 
 trait HasIPXACTParameters {
@@ -34,7 +35,7 @@ class DspConfig extends Config(
   (pname, site, here) => pname match {
     case BuildDSP => { (q: Parameters) => {
       implicit val p = q
-      Module(new SAMWrapper)
+      Module(new SAMWrapper(null))
     }}
     case SAMKey => SAMConfig(10, 10, 0)
 	  case NastiKey => NastiParameters(64, 32, 1)
@@ -79,7 +80,7 @@ case object SAMKey extends Field[SAMConfig]
 
 // subpackets = basically how many cycles it takes for sync to repeat
 // bufferDepth = how many packets to store
-case class SAMConfig(val subpackets: Int, val bufferDepth: Int, val baseAddr: Int) {
+case class SAMConfig(subpackets: Int, bufferDepth: Int, baseAddr: Int) {
   // sanity checks
   //require(lanesIn%lanesOut == 0, "Decimation amount must be an integer.")
   //require(lanesOut <= lanesIn, "Cannot have more output lanes than input lanes.")
